@@ -2,10 +2,12 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:convert';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
@@ -32,7 +34,12 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   String? selectedCourse;
 
   bool isGenerating = false;
+  bool isSaving = false;
   Uint8List? pdfBytes;
+
+  // Track the current certificate's metadata so Save can use it
+  String? _currentCertId;
+  String? _currentTxHash;
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
@@ -53,6 +60,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   }
 
   void showMsg(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
@@ -154,22 +162,30 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   // ============================================================
   // QR CODE GENERATION
   // ============================================================
+  // UNIFIED PAYLOAD — keys match what qr_verify_page and
+  // certificate_validate both expect:
+  //   v        → version (int 1)
+  //   type     → "CERT"
+  //   certId   → certificate ID
+  //   hash     → SHA-256 of base PDF  ← was "pdfHash" (broken)
+  //   tx       → blockchain tx hash
+  //   issuer   → issuer name
+  // ============================================================
   Future<Uint8List> _generateQRCode({
     required String certId,
     required String pdfHash,
     required String txHash,
   }) async {
-    // Create structured JSON payload
     final payload = jsonEncode({
-      "schema": "certosec.v1",
-      "type": "CERT",
+      "v": 1, // version flag expected by verifier
+      "type": "CERT", // type flag
       "certId": certId,
-      "pdfHash": pdfHash,
+      "hash": pdfHash, // FIXED: was "pdfHash", verifier reads "hash"
       "tx": txHash,
       "issuer": "CertoSec",
     });
 
-    print("QR Payload: $payload"); // Debug
+    print("QR Payload: $payload");
 
     final qrValidation = QrValidator.validate(
       data: payload,
@@ -328,7 +344,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
               ),
             ),
 
-            // QR Code (bottom-right) - CRITICAL: MUST BE VISIBLE
+            // QR Code (bottom-right)
             pw.Positioned(
               right: 36,
               bottom: 130,
@@ -337,7 +353,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                 children: [
                   pw.Image(
                     pw.MemoryImage(qrBytes),
-                    width: 100, // Increased size
+                    width: 100,
                     height: 100,
                   ),
                   pw.SizedBox(height: 4),
@@ -428,7 +444,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
       );
       print("✅ Blockchain TX: $txHash");
 
-      // 5️⃣ Generate QR code with all data
+      // 5️⃣ Generate QR code with unified payload
       print("📱 Generating QR code...");
       final qrBytes = await _generateQRCode(
         certId: certId,
@@ -450,10 +466,11 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         qrBytes: qrBytes,
       );
 
-      // 7️⃣ Store in Firestore (with BOTH certId and txHash)
-      print("💾 Saving to Firestore...");
+      // 7️⃣ Store metadata in Firestore (NO storageUrl yet — user clicks Save)
+      print("💾 Saving metadata to Firestore...");
       await _firestore.collection("allCertificates").doc(certId).set({
         "certId": certId,
+        "uniqueKey": certId, // alias used by certificate_view search
         "name": nameController.text,
         "email": emailController.text,
         "registrationNumber": regController.text,
@@ -465,6 +482,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         "status": "valid",
         "createdAt": FieldValue.serverTimestamp(),
         "createdBy": FirebaseAuth.instance.currentUser?.uid,
+        // storageUrl is intentionally omitted until user clicks "Save"
       });
 
       // Also create a txHash lookup document
@@ -473,9 +491,14 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         "createdAt": FieldValue.serverTimestamp(),
       });
 
+      // Keep references so _saveCertificateToFirebase can use them
+      _currentCertId = certId;
+      _currentTxHash = txHash;
+
       setState(() => pdfBytes = finalPdf);
 
-      showMsg("✅ Certificate generated successfully!");
+      showMsg(
+          "✅ Certificate generated! Tap \"Save to Firebase\" to make it downloadable.");
       print("✅ Certificate generation complete: $certId");
     } catch (e) {
       showMsg("❌ Error: $e");
@@ -483,6 +506,51 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
     }
 
     setState(() => isGenerating = false);
+  }
+
+  // ============================================================
+  // SAVE PDF TO FIREBASE STORAGE  (new)
+  // Gzips the PDF, uploads to Storage, then patches the Firestore
+  // doc with the download URL so certificate_view can fetch it.
+  // ============================================================
+  Future<void> _saveCertificateToFirebase() async {
+    if (pdfBytes == null || _currentCertId == null) {
+      showMsg("❌ Nothing to save — generate a certificate first.");
+      return;
+    }
+
+    setState(() => isSaving = true);
+
+    try {
+      final certId = _currentCertId!;
+
+      // 1️⃣  Gzip compress
+      final gzipped = Uint8List.fromList(
+        GZipEncoder().encode(pdfBytes!)!,
+      );
+
+      // 2️⃣  Upload to Firebase Storage  →  certificates/<certId>.pdf.gz
+      final storageRef =
+          FirebaseStorage.instance.ref("certificates/$certId.pdf.gz");
+      await storageRef.putData(gzipped);
+      final downloadUrl = await storageRef.getDownloadURL();
+
+      print("☁️  Uploaded to: $downloadUrl");
+
+      // 3️⃣  Patch Firestore doc with the URL
+      await _firestore
+          .collection("allCertificates")
+          .doc(certId)
+          .update({"storageUrl": downloadUrl});
+
+      showMsg("✅ Certificate saved to Firebase! It is now downloadable.");
+      print("✅ storageUrl written for $certId");
+    } catch (e) {
+      showMsg("❌ Save failed: $e");
+      print("❌ Save error: $e");
+    }
+
+    setState(() => isSaving = false);
   }
 
   // ============================================================
@@ -601,6 +669,8 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                     ),
                   ),
                   SizedBox(height: 24),
+
+                  // ── Generate button ──
                   SizedBox(
                     width: double.infinity,
                     height: 50,
@@ -629,6 +699,39 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                       ),
                     ),
                   ),
+
+                  // ── Save to Firebase button (visible only after generation) ──
+                  if (pdfBytes != null) ...[
+                    SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton.icon(
+                        onPressed: isSaving ? null : _saveCertificateToFirebase,
+                        icon: isSaving
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Icon(Icons.cloud_upload),
+                        label: Text(
+                          isSaving ? "Saving..." : "Save to Firebase",
+                          style: TextStyle(fontSize: 16),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green[700],
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

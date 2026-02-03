@@ -30,6 +30,10 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
 
   bool loadingFilters = true;
 
+  // Track which certId is currently being downloaded so we can show a
+  // per-card spinner instead of disabling every button.
+  String? _downloadingCertId;
+
   @override
   void initState() {
     super.initState();
@@ -63,9 +67,10 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
 
   bool matchesSearch(Map<String, dynamic> c) {
     final t = searchText.toLowerCase();
-    return c["email"].toLowerCase().contains(t) ||
-        c["course"].toLowerCase().contains(t) ||
-        c["uniqueKey"].toLowerCase().contains(t);
+    return (c["email"] ?? "").toLowerCase().contains(t) ||
+        (c["course"] ?? "").toLowerCase().contains(t) ||
+        (c["uniqueKey"] ?? c["certId"] ?? "").toLowerCase().contains(t) ||
+        (c["name"] ?? "").toLowerCase().contains(t);
   }
 
   bool matchesFilters(Map<String, dynamic> c) {
@@ -100,7 +105,7 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
       child: TextField(
         decoration: InputDecoration(
-          hintText: "Search by Email, Course, or Key...",
+          hintText: "Search by Name, Email, Course, or Key...",
           prefixIcon: Icon(Icons.search),
           filled: true,
           fillColor: Colors.grey.shade100,
@@ -226,7 +231,7 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
             itemCount: filtered.length,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
-              childAspectRatio: 1.1,
+              childAspectRatio: 1.05,
               mainAxisSpacing: 18,
               crossAxisSpacing: 18,
             ),
@@ -238,6 +243,10 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
   }
 
   Widget _certificateCard(Map<String, dynamic> c) {
+    final certId = c["certId"] ?? c["id"];
+    final storageUrl = c["storageUrl"] as String?;
+    final isDownloading = _downloadingCertId == certId;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -259,14 +268,14 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                c["name"],
+                c["name"] ?? "Unknown",
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
               SizedBox(height: 4),
               Text(
-                c["email"],
+                c["email"] ?? "",
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -277,7 +286,7 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
                   SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      c["course"],
+                      c["course"] ?? "",
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -291,7 +300,7 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
                   SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      c["university"],
+                      c["university"] ?? "",
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -303,27 +312,48 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
                 children: [
                   Icon(Icons.calendar_month, size: 18),
                   SizedBox(width: 6),
-                  Text("Year: ${c["year"]}"),
+                  Text("Year: ${c["year"] ?? "N/A"}"),
                 ],
               ),
               SizedBox(height: 10),
               Text(
-                "Key: ${c["uniqueKey"]}",
+                "Key: ${c["uniqueKey"] ?? c["certId"] ?? "N/A"}",
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
+
+          // ── Download button area ──
           Align(
             alignment: Alignment.bottomRight,
-            child: ElevatedButton.icon(
-              onPressed: c["storageUrl"] == null
-                  ? null
-                  : () => downloadFile(c["storageUrl"]),
-              icon: Icon(Icons.download),
-              label: Text("Download"),
-            ),
+            child: storageUrl == null
+                // No storageUrl → certificate was generated but not saved yet
+                ? Text(
+                    "Not saved to cloud yet",
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[500],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  )
+                : ElevatedButton.icon(
+                    onPressed: isDownloading
+                        ? null
+                        : () => downloadFile(certId, storageUrl),
+                    icon: isDownloading
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Icon(Icons.download),
+                    label: Text(isDownloading ? "..." : "Download"),
+                  ),
           ),
         ],
       ),
@@ -331,11 +361,13 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
   }
 
   /// PLATFORM SAFE DOWNLOAD METHOD
-  Future<void> downloadFile(String storageUrl) async {
+  Future<void> downloadFile(String certId, String storageUrl) async {
     print("Downloading: $storageUrl");
 
+    setState(() => _downloadingCertId = certId);
+
     try {
-      // 1. Load .gz file
+      // 1. Load .gz file from Storage
       final ref = FirebaseStorage.instance.refFromURL(storageUrl);
       final Uint8List? gzBytes = await ref.getData();
 
@@ -343,23 +375,29 @@ class _CertificateViewPageState extends State<CertificateViewPage> {
         throw Exception("Download failed (null bytes)");
       }
 
-      // 2. Decompress
+      // 2. Decompress gzip → original PDF bytes
       final pdfBytes = Uint8List.fromList(GZipDecoder().decodeBytes(gzBytes));
       final fileName = ref.name.replaceAll(".gz", "");
 
-      // -------- WEB --------
+      // ── WEB: trigger browser download with the raw PDF bytes ──
       if (kIsWeb) {
         downloadPdfBytesWeb(pdfBytes, fileName);
+        setState(() => _downloadingCertId = null);
         return;
       }
 
-      // -------- MOBILE: OPEN URL --------
+      // ── MOBILE: open the gzipped URL directly so the OS handles it ──
+      // (most mobile OSes can open PDF URLs natively)
       final uri = Uri.parse(storageUrl);
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (e) {
       print("Download error: $e");
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Failed to download file")));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Failed to download file")));
+      }
     }
+
+    if (mounted) setState(() => _downloadingCertId = null);
   }
 }
