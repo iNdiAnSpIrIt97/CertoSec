@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+
+  <!-- FIX multiview error -->
+  <meta name="flutter-web-use-multiview" content="false">
+
+  <!-- Use stable HTML renderer -->
+  <meta name="flutter-web-renderer" content="html">
+
+  <meta name="description" content="certosec app">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Firebase COMPAT SDKs (required for Flutter Web) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyCysFmvXGOkJoq8RYPTU3t-PF-AxWcNwNw",
+      authDomain: "certosec.firebaseapp.com",
+      projectId: "certosec",
+      storageBucket: "certosec.firebasestorage.app",
+      messagingSenderId: "574044249088",
+      appId: "1:574044249088:web:e0c01e68645f2f33664ce5",
+      measurementId: "G-XJYJR6DCJ4"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+  </script>
+</head>
+
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+
+</html>

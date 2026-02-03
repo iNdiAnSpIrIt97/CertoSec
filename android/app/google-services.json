@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "752351836162",
+    "project_id": "certosec-e58dd",
+    "storage_bucket": "certosec-e58dd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:752351836162:android:1c22522b5b2427b691cf1b",
+        "android_client_info": {
+          "package_name": "com.example.certosec"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAz_unkHf0kwVexCox52Auhn1F9ZypDEeE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:752351836162:android:ed1657229bbf7e6891cf1b",
+        "android_client_info": {
+          "package_name": "com.yuva.certosec"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAz_unkHf0kwVexCox52Auhn1F9ZypDEeE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
