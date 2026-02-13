@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // kIsWeb
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -14,6 +15,7 @@ import 'package:printing/printing.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../services/blockchain_service.dart';
+import '../../utils/pdf_downloader.dart'; // for web download
 
 class CertificateGeneratorPage extends StatefulWidget {
   const CertificateGeneratorPage({super.key});
@@ -37,7 +39,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   bool isSaving = false;
   Uint8List? pdfBytes;
 
-  // Track the current certificate's metadata so Save can use it
+  // Track the current certificate's metadata
   String? _currentCertId;
   String? _currentTxHash;
 
@@ -162,25 +164,16 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   // ============================================================
   // QR CODE GENERATION
   // ============================================================
-  // UNIFIED PAYLOAD — keys match what qr_verify_page and
-  // certificate_validate both expect:
-  //   v        → version (int 1)
-  //   type     → "CERT"
-  //   certId   → certificate ID
-  //   hash     → SHA-256 of base PDF  ← was "pdfHash" (broken)
-  //   tx       → blockchain tx hash
-  //   issuer   → issuer name
-  // ============================================================
   Future<Uint8List> _generateQRCode({
     required String certId,
     required String pdfHash,
     required String txHash,
   }) async {
     final payload = jsonEncode({
-      "v": 1, // version flag expected by verifier
-      "type": "CERT", // type flag
+      "v": 1,
+      "type": "CERT",
       "certId": certId,
-      "hash": pdfHash, // FIXED: was "pdfHash", verifier reads "hash"
+      "hash": pdfHash,
       "tx": txHash,
       "issuer": "CertoSec",
     });
@@ -225,10 +218,16 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   }) async {
     final pdf = pw.Document();
 
-    // Load logo
-    final logoBytes =
-        await DefaultAssetBundle.of(context).load('assets/logo.png');
-    final logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
+    // Load logo - wrapped in try-catch for web compatibility
+    pw.ImageProvider? logoImage;
+    try {
+      final logoBytes =
+          await DefaultAssetBundle.of(context).load('assets/logo.png');
+      logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
+    } catch (e) {
+      print("⚠️ Logo not loaded: $e");
+      // Continue without logo if it fails
+    }
 
     pdf.addPage(
       pw.Page(
@@ -248,9 +247,11 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.center,
                 children: [
-                  // Logo
-                  pw.Image(logoImage, width: 90),
-                  pw.SizedBox(height: 16),
+                  // Logo (if loaded)
+                  if (logoImage != null) ...[
+                    pw.Image(logoImage, width: 90),
+                    pw.SizedBox(height: 16),
+                  ],
 
                   pw.Text(
                     university.toUpperCase(),
@@ -416,14 +417,11 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
     setState(() => isGenerating = true);
 
     try {
-      // 1️⃣ Generate unique certificate ID
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final certId = "${timestamp}_${regController.text}";
 
       print("📝 Generating certificate: $certId");
 
-      // 2️⃣ Create base PDF (for hash calculation)
-      print("🔐 Creating base PDF for hash...");
       final basePdf = await _createBasePDF(
         name: nameController.text,
         course: selectedCourse!,
@@ -432,11 +430,9 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         reg: regController.text,
       );
 
-      // 3️⃣ Calculate PDF hash
       final pdfHash = generatePdfHash(basePdf);
       print("🔐 PDF Hash: $pdfHash");
 
-      // 4️⃣ Store on blockchain
       print("🔗 Storing on blockchain...");
       final txHash = await BlockchainService.storeCertificate(
         certId: certId,
@@ -444,7 +440,6 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
       );
       print("✅ Blockchain TX: $txHash");
 
-      // 5️⃣ Generate QR code with unified payload
       print("📱 Generating QR code...");
       final qrBytes = await _generateQRCode(
         certId: certId,
@@ -452,7 +447,6 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         txHash: txHash,
       );
 
-      // 6️⃣ Create final PDF with QR code
       print("📄 Creating final PDF...");
       final finalPdf = await _createFinalPDF(
         certId: certId,
@@ -466,11 +460,10 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         qrBytes: qrBytes,
       );
 
-      // 7️⃣ Store metadata in Firestore (NO storageUrl yet — user clicks Save)
       print("💾 Saving metadata to Firestore...");
       await _firestore.collection("allCertificates").doc(certId).set({
         "certId": certId,
-        "uniqueKey": certId, // alias used by certificate_view search
+        "uniqueKey": certId,
         "name": nameController.text,
         "email": emailController.text,
         "registrationNumber": regController.text,
@@ -482,23 +475,19 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
         "status": "valid",
         "createdAt": FieldValue.serverTimestamp(),
         "createdBy": FirebaseAuth.instance.currentUser?.uid,
-        // storageUrl is intentionally omitted until user clicks "Save"
       });
 
-      // Also create a txHash lookup document
       await _firestore.collection("txHashLookup").doc(txHash).set({
         "certId": certId,
         "createdAt": FieldValue.serverTimestamp(),
       });
 
-      // Keep references so _saveCertificateToFirebase can use them
       _currentCertId = certId;
       _currentTxHash = txHash;
 
       setState(() => pdfBytes = finalPdf);
 
-      showMsg(
-          "✅ Certificate generated! Tap \"Save to Firebase\" to make it downloadable.");
+      showMsg("✅ Certificate generated! Download or save to Firebase.");
       print("✅ Certificate generation complete: $certId");
     } catch (e) {
       showMsg("❌ Error: $e");
@@ -509,9 +498,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   }
 
   // ============================================================
-  // SAVE PDF TO FIREBASE STORAGE  (new)
-  // Gzips the PDF, uploads to Storage, then patches the Firestore
-  // doc with the download URL so certificate_view can fetch it.
+  // SAVE PDF TO FIREBASE STORAGE
   // ============================================================
   Future<void> _saveCertificateToFirebase() async {
     if (pdfBytes == null || _currentCertId == null) {
@@ -524,20 +511,17 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
     try {
       final certId = _currentCertId!;
 
-      // 1️⃣  Gzip compress
       final gzipped = Uint8List.fromList(
         GZipEncoder().encode(pdfBytes!)!,
       );
 
-      // 2️⃣  Upload to Firebase Storage  →  certificates/<certId>.pdf.gz
       final storageRef =
           FirebaseStorage.instance.ref("certificates/$certId.pdf.gz");
       await storageRef.putData(gzipped);
       final downloadUrl = await storageRef.getDownloadURL();
 
-      print("☁️  Uploaded to: $downloadUrl");
+      print("☁️ Uploaded to: $downloadUrl");
 
-      // 3️⃣  Patch Firestore doc with the URL
       await _firestore
           .collection("allCertificates")
           .doc(certId)
@@ -554,11 +538,25 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
   }
 
   // ============================================================
+  // DOWNLOAD PDF (for web users who can't see preview)
+  // ============================================================
+  void _downloadPdf() {
+    if (pdfBytes == null || _currentCertId == null) return;
+
+    try {
+      downloadPdfBytesWeb(pdfBytes!, "$_currentCertId.pdf");
+      showMsg("✅ Certificate downloaded!");
+    } catch (e) {
+      showMsg("❌ Download failed: $e");
+    }
+  }
+
+  // ============================================================
   // UI
   // ============================================================
   @override
   Widget build(BuildContext context) {
-    final isDesktop = MediaQuery.of(context).size.width > 900;
+    final isWideScreen = MediaQuery.of(context).size.width > 900;
 
     return Scaffold(
       appBar: AppBar(
@@ -568,6 +566,7 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
       ),
       body: Row(
         children: [
+          // ──────── LEFT: form ────────
           Expanded(
             flex: 3,
             child: SingleChildScrollView(
@@ -700,9 +699,11 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                     ),
                   ),
 
-                  // ── Save to Firebase button (visible only after generation) ──
+                  // ── Action buttons (visible after generation) ──
                   if (pdfBytes != null) ...[
                     SizedBox(height: 16),
+
+                    // Save to Firebase
                     SizedBox(
                       width: double.infinity,
                       height: 50,
@@ -731,12 +732,38 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                         ),
                       ),
                     ),
+
+                    // Download button (always visible on web since preview doesn't work)
+                    if (kIsWeb) ...[
+                      SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          onPressed: _downloadPdf,
+                          icon: Icon(Icons.download),
+                          label: Text(
+                            "Download PDF",
+                            style: TextStyle(fontSize: 16),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue[700],
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),
             ),
           ),
-          if (isDesktop && pdfBytes != null)
+
+          // ──────── RIGHT: preview panel ────────
+          if (isWideScreen && pdfBytes != null)
             Expanded(
               flex: 4,
               child: Container(
@@ -744,15 +771,63 @@ class _CertificateGeneratorPageState extends State<CertificateGeneratorPage> {
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey[300]!),
                   borderRadius: BorderRadius.circular(12),
+                  color: Colors.grey[50],
                 ),
-                child: PdfPreview(
-                  build: (_) => pdfBytes!,
-                  canChangePageFormat: false,
-                  canDebug: false,
-                ),
+                child: kIsWeb
+                    ? _buildWebPreviewPlaceholder()
+                    : PdfPreview(
+                        build: (_) => pdfBytes!,
+                        canChangePageFormat: false,
+                        canDebug: false,
+                      ),
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  // ── Web: show a message instead of broken preview ──
+  Widget _buildWebPreviewPlaceholder() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.picture_as_pdf, size: 80, color: Colors.grey[400]),
+            SizedBox(height: 20),
+            Text(
+              "Certificate Generated!",
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[800],
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              "PDF preview is not available on web.\nUse the download button to view your certificate.",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey[600],
+              ),
+            ),
+            SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _downloadPdf,
+              icon: Icon(Icons.download),
+              label: Text("Download PDF"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[700],
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                textStyle: TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

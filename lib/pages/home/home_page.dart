@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:certosec/pages/certificate/certificate_generator.dart';
 import 'package:certosec/pages/certificate/certificate_validate.dart';
 import 'package:certosec/pages/certificate/certificate_view.dart';
-import 'package:certosec/pages/certificate/qr_verify_page.dart';
+// import 'package:certosec/pages/certificate/qr_verify_page.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -58,7 +58,7 @@ class _HomePageState extends State<HomePage> {
     "Dashboard",
     "Certificate Generation",
     "Certificate Verification",
-    "QR Blockchain Verify",
+    // "QR Blockchain Verify",
     "Search Student",
     "Logout",
   ];
@@ -71,11 +71,11 @@ class _HomePageState extends State<HomePage> {
         return Icons.picture_as_pdf;
       case 2:
         return Icons.verified;
+      // case 3:
+      // return Icons.qr_code_scanner;
       case 3:
-        return Icons.qr_code_scanner;
-      case 4:
         return Icons.search;
-      case 5:
+      case 4:
         return Icons.logout;
       default:
         return Icons.circle;
@@ -96,13 +96,13 @@ class _HomePageState extends State<HomePage> {
       case 2:
         return CertificateValidationPage();
 
-      case 3:
-        return const QrVerifyPage();
+      // case 3:
+      //   return const QrVerifyPage();
 
-      case 4:
+      case 3:
         return CertificateViewPage();
 
-      case 5:
+      case 4:
         FirebaseAuth.instance.signOut();
         Future.microtask(() => Navigator.pop(context));
         return const SizedBox();

@@ -1,43 +1,4 @@
 {
-  "flutter": {
-    "platforms": {
-      "android": {
-        "default": {
-          "projectId": "certosec-e58dd",
-          "appId": "1:752351836162:android:1c22522b5b2427b691cf1b",
-          "fileOutput": "android/app/google-services.json"
-        }
-      },
-      "ios": {
-        "default": {
-          "projectId": "certosec-e58dd",
-          "appId": "1:752351836162:ios:e8ad096ed7259ffe91cf1b",
-          "uploadDebugSymbols": false,
-          "fileOutput": "ios/Runner/GoogleService-Info.plist"
-        }
-      },
-      "macos": {
-        "default": {
-          "projectId": "certosec-e58dd",
-          "appId": "1:752351836162:ios:e8ad096ed7259ffe91cf1b",
-          "uploadDebugSymbols": false,
-          "fileOutput": "macos/Runner/GoogleService-Info.plist"
-        }
-      },
-      "dart": {
-        "lib/firebase_options.dart": {
-          "projectId": "certosec-e58dd",
-          "configurations": {
-            "android": "1:752351836162:android:1c22522b5b2427b691cf1b",
-            "ios": "1:752351836162:ios:e8ad096ed7259ffe91cf1b",
-            "macos": "1:752351836162:ios:e8ad096ed7259ffe91cf1b",
-            "web": "1:752351836162:web:82ad452bd2bc90d591cf1b",
-            "windows": "1:752351836162:web:82ad452bd2bc90d591cf1b"
-          }
-        }
-      }
-    }
-  },
   "hosting": {
     "public": "build/web",
     "ignore": [
@@ -50,19 +11,26 @@
         "source": "**",
         "destination": "/index.html"
       }
+    ],
+    "headers": [
+      {
+        "source": "**/*.wasm",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/wasm"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(png|jpg|jpeg|svg|webp)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public,max-age=31536000,immutable"
+          }
+        ]
+      }
     ]
-  },
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
-      ]
-    }
-  ]
+  }
 }

@@ -53,6 +53,7 @@ dependencies:
   crypto: ^3.0.7
   cloud_functions: ^6.0.4
 
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -92,6 +93,7 @@ flutter:
     - assets/logo.png
     - assets/sign_1.jpg
     - assets/sign_2.jpg
+    - assets/applogo/appicon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
